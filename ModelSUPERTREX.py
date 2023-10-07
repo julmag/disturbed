@@ -161,7 +161,7 @@ class ModelSUPERTREX:
         print('Training')
         for trial_num in tqdm(range(s.n_train_trials)):
             if trial_num >= 1:
-                print("MSE: ", np.mean(s.error[-1,:]))
+                print("MSE: ", np.mean(s.error[trial_num-1,:]))
 
             for time_step in range(s.n_timesteps):
                 
@@ -207,7 +207,7 @@ class ModelSUPERTREX:
                 if (time_step+1)%s.batch_size == 0 or time_step==0:
                              
                     # Update readout weights
-                    s.W_RMHL = W_RMHL_old - s.learningrate * 1/s.noise_sigma * task.phi(np.mean(e_hat_bar)) * noise    
+                    s.W_RMHL = W_RMHL_old - s.learningrate * 1/s.noise_sigma**2 * np.mean(e_hat_bar) * noise    
                     
                 #if (time_step+1)%1000 == 0 or time_step==0:
                  #   print("Weights at:", time_step, "are at: ", s.W_RMHL[-1,-3:])
