@@ -84,10 +84,10 @@ class ModelSUPERTREX:
         s.n_timesteps       = int(s.T/s.dT)                                                 # No. of timesteps in a trial
         s.sigma             = s.lmbda / np.sqrt((s.sparsity*s.N))                           # Standard deviation of initial reservoir connectivity
 
-        s.learningrate      = .0005                                                         # RMHL learning rate as per authors
+        s.learningrate      = .05                                                         # RMHL learning rate as per authors
         s.noise_sigma       = .005
-        s.batch_size        = 100
-        s.force_batch_size = s.batch_size * 1
+        s.batch_size        = 10
+        s.force_batch_size = s.batch_size * 10
 
         if exp['rseed'] == 0:   s.rseed = np.random.randint(0,1e7)
         else :                  s.rseed = exp['rseed']                                      # Seed for randomisation
@@ -207,7 +207,10 @@ class ModelSUPERTREX:
                 if (time_step+1)%s.batch_size == 0 or time_step==0:
                              
                     # Update readout weights
-                    s.W_RMHL = W_RMHL_old - s.learningrate * 1/s.noise_sigma**2 * np.mean(e_hat_bar) * noise    
+                    # s.W_RMHL = W_RMHL_old - s.learningrate * 1/s.noise_sigma**2 * np.mean(e_hat_bar) * noise  
+                    if np.mean(e_hat_bar) < 0:
+                        # s.W_RMHL = W_RMHL_old + s.learningrate * task.phi(e_hat) * np.dot(z_RMHL_hat,s.r.T) * task.compensation('RMHL')   
+                        s.W_RMHL = W_RMHL_old + s.learningrate * task.phi(e_hat) * noise * task.compensation('RMHL')
                     
                 #if (time_step+1)%1000 == 0 or time_step==0:
                  #   print("Weights at:", time_step, "are at: ", s.W_RMHL[-1,-3:])
