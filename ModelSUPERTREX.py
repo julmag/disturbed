@@ -85,7 +85,7 @@ class ModelSUPERTREX:
         s.sigma             = s.lmbda / np.sqrt((s.sparsity*s.N))                           # Standard deviation of initial reservoir connectivity
 
         s.learningrate      = .02#.01                                                         # RMHL learning rate as per authors
-        s.sigma_WP          = .005
+        s.sigma_WP          = .005 #might work
 
         if exp['rseed'] == 0:   s.rseed = np.random.randint(0,1e7)
         else :                  s.rseed = exp['rseed']                                      # Seed for randomisation
