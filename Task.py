@@ -206,7 +206,7 @@ class Task:
             noise_sigma  = How much of the average signal should be added as noice. Determince the variance of noise. Input Range 0.-1..
       """
       noise_variance = np.array(np.mean(np.abs(arr), axis=1) * noise_sigma)
-      noise = np.random.normal(0, noise_variance,[arr.shape[1],arr.shape[0]]).T
+      noise = np.random.normal(0, np.sqrt(noise_variance),[arr.shape[1],arr.shape[0]]).T #NOTE: np.random.normal(loc, scale, size) scale = standard deviation != variance(!)
       noised_array = arr + noise
 
       return noised_array, noise 

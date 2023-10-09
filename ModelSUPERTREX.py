@@ -84,10 +84,8 @@ class ModelSUPERTREX:
         s.n_timesteps       = int(s.T/s.dT)                                                 # No. of timesteps in a trial
         s.sigma             = s.lmbda / np.sqrt((s.sparsity*s.N))                           # Standard deviation of initial reservoir connectivity
 
-        s.learningrate      = .05                                                         # RMHL learning rate as per authors
-        s.noise_sigma       = .005
-        s.batch_size        = 10
-        s.force_batch_size = s.batch_size * 10
+        s.learningrate      = .02#.01                                                         # RMHL learning rate as per authors
+        s.sigma_WP          = .005
 
         if exp['rseed'] == 0:   s.rseed = np.random.randint(0,1e7)
         else :                  s.rseed = exp['rseed']                                      # Seed for randomisation
@@ -133,11 +131,12 @@ class ModelSUPERTREX:
         s.outputs = np.column_stack((_data['x'], _data['y']))
         s.outputs = s.outputs.reshape((s.outputs.shape[0], 2, 1))
         s.P = np.identity(s.N) / s.gamma                                                    # FORCE inverse correlation estimate initialization
-        s.I = np.identity(s.N) 
         s.e = 0
         s.e_bar = 0
         s.z_bar = np.zeros((s.n_out, 1))
         s.z_RMHL_bar = np.zeros((s.n_out, 1))
+
+        s.noise_bar = np.zeros((s.n_out, s.N))  
 
 
         # Plotting purposes
@@ -152,24 +151,17 @@ class ModelSUPERTREX:
 
 
 
-
-
     def train(s, task):
         """ Training the model using the SUPERTREX algorithm. """
 
         # Online training
         print('Training')
-        for trial_num in tqdm(range(s.n_train_trials)):
+        ##NOTE: change tqdm to update more often
+        tqdm_pbar = tqdm(total=s.n_train_trials*s.n_timesteps, ncols=80)
+        for trial_num in range(s.n_train_trials):
             if trial_num >= 1:
-                print("MSE: ", np.mean(s.error[trial_num-1,:]))
-
+                print("MSE: ", np.mean(s.error[trial_num-1]))
             for time_step in range(s.n_timesteps):
-                
-                if (time_step+1)%s.batch_size == 0 or time_step==0:
-                    W_RMHL_old = s.W_RMHL *1
-                    #s.W_RMHL, noise = task.noise_adder_percentage(s.W_RMHL, s.noise_sigma)
-                    s.W_RMHL, noise = task.noise_adder(s.W_RMHL, s.noise_sigma)
-                    e_hat_bar = []
 
                 # Update reservoir state
                 s.x     = s.x + (s.leak)*(-s.x +np.dot(s.J,s.r) + np.dot(s.Q,s.z))
@@ -178,9 +170,16 @@ class ModelSUPERTREX:
 
                 # Compute output at current timestep
                 t_psi   = task.psi(s.e_bar, trial_num, time_step)
-                xi_z    = np.random.uniform(0, 1, (s.n_out, 1)) * t_psi * 2 - t_psi
-                #z_RMHL  = np.dot(s.W_RMHL, s.r) + xi_z
-                z_RMHL  = np.dot(s.W_RMHL, s.r) 
+            
+                ## change to weight pertubation instead of node pertubation
+                noise = np.random.normal(0, np.sqrt(s.sigma_WP), [s.W_RMHL.shape[0], s.W_RMHL.shape[1]]) * t_psi
+                w_act = np.copy(s.W_RMHL)
+                s.noise_bar = (1 - s.dT/s.tau_z) * s.noise_bar + s.dT/s.tau_z * noise
+                noise_hat = noise - s.noise_bar                     
+                w_act = w_act + noise
+
+
+                z_RMHL  = np.dot(w_act, s.r)
                 z_FORCE = np.dot(s.W_FORCE,s.r)
                 s.z     = z_RMHL + z_FORCE
                 hz      = task.h(s.z)
@@ -188,7 +187,7 @@ class ModelSUPERTREX:
                 # Computing high pass filtered values for output
                 s.z_RMHL_bar = (1 - s.dT/s.tau_z) * s.z_RMHL_bar + s.dT/s.tau_z * z_RMHL    # tau_z = 2 for task2 (authors) but in plot tau_z = 1 (authors)
                 if trial_num==0 and time_step==0:   s.z_RMHL_bar = z_RMHL
-                z_RMHL_hat   = z_RMHL - s.z_RMHL_bar                                        # Firerate - Average Firerate Coovar learningrule
+                z_RMHL_hat   = z_RMHL - s.z_RMHL_bar
                 s.z_bar = (1 - s.dT/s.tau_z) * s.z_bar + s.dT/s.tau_z * s.z
                 if trial_num==0 and time_step==0:   s.z_bar = s.z                           # Change: Adding s.z_bar and z_hat
                 z_hat   = s.z - s.z_bar
@@ -198,40 +197,25 @@ class ModelSUPERTREX:
                 cost    = task.cost(z_hat)
                 ze      = hz-s.outputs[time_step]
                 s.e     = np.sum(ze ** 2 ) + cost
-                s.e_bar = (1 - s.dT) * s.e_bar + s.dT * s.e         #   Running Average Error
+                s.e_bar = (1 - s.dT) * s.e_bar + s.dT * s.e
                 if trial_num == 0 and time_step == 0:   s.e_bar = s.e
-                e_hat   = s.e-s.e_bar                               # Advantage
-                e_hat_bar.append(e_hat) 
-                
+                e_hat   = s.e-s.e_bar
 
-                if (time_step+1)%s.batch_size == 0 or time_step==0:
-                             
-                    # Update readout weights
-                    # s.W_RMHL = W_RMHL_old - s.learningrate * 1/s.noise_sigma**2 * np.mean(e_hat_bar) * noise  
-                    if np.mean(e_hat_bar) < 0:
-                        # s.W_RMHL = W_RMHL_old + s.learningrate * task.phi(e_hat) * np.dot(z_RMHL_hat,s.r.T) * task.compensation('RMHL')   
-                        s.W_RMHL = W_RMHL_old + s.learningrate * task.phi(e_hat) * noise * task.compensation('RMHL')
-                    
-                #if (time_step+1)%1000 == 0 or time_step==0:
-                 #   print("Weights at:", time_step, "are at: ", s.W_RMHL[-1,-3:])
-                  #  print("Ehat bar is at", e_hat_bar)
+                # Update readout weights
+                delta_W =  s.learningrate * task.phi(e_hat) * noise_hat #/s.sigma_WP
 
-                
-                #s.W_RMHL += s.learningrate * task.phi(e_hat) * np.dot(z_RMHL_hat,s.r.T) * task.compensation('RMHL') 
-                
+                s.W_RMHL += delta_W   
 
                 # Compute running estimate (every 10 timesteps to reduce computation time) (+1 because matlab is 1-indexed)
-                if (time_step+1)%s.force_batch_size == 0:
+                if (time_step+1)%10 == 0:
 
                     Pr = np.dot(s.P, s.r)
-                    #Pr = np.dot(s.I, s.r) #Replaced P with Identiy Matrix. The rest should 
                     rPr = np.dot(s.r.T, Pr)[0, 0]
                     c = 1.0/(1.0 + rPr)
                     trans_thres = s.transfer_threshold(s.e_bar)
                     s.P -= np.dot(Pr, Pr.T * c*trans_thres)
 
                     s.W_FORCE += np.dot(s.ST_k * c * trans_thres * s.z_RMHL_bar, Pr.T)        # ST_k = 0.9 for task 3 and 0.5 for task 1, 2
-                    
 
                 # Recording purposes
                 s.error[trial_num, time_step]           = s.e
@@ -243,7 +227,7 @@ class ModelSUPERTREX:
                 s.W_RMHL_rec[trial_num, time_step]      = task.norm(s.W_RMHL)
                 s.W_FORCE_rec[trial_num, time_step]     = task.norm(s.W_FORCE)
 
-
+                tqdm_pbar.update(1)
         print('Training done')
 
     def test(s, task):
@@ -253,7 +237,6 @@ class ModelSUPERTREX:
         print('Testing')
         z_RMHL = np.zeros((s.n_out,1))
         for trial_num in tqdm(range(s.n_train_trials, s.n_total_trials)):
-
             for time_step in range(s.n_timesteps):
 
                 # Update reservoir state
@@ -290,7 +273,7 @@ class ModelSUPERTREX:
         """ Function that limits transfer to mastery pathway only at low error. """
 
         # Modification: authors - changing 1.5 to 15
-        if s.task_type > 1:    return -.5 * np.tanh(500000 * (np.abs(x) - (15e-3))) + .5
+        if s.task_type > 1:    return -.5 * np.tanh(500000 * (np.abs(x) - (1.5e-2))) + .5
         else:                   return -.5 * np.tanh(500000 * (np.abs(x) - (1.5e-3))) + .5
 
 
@@ -309,7 +292,6 @@ class ModelSUPERTREX:
                     W_RMHL              = s.W_RMHL_rec,
                     W_FORCE             = s.W_FORCE_rec
                     )
-        
 
     def plot(s, exp, task):
         """
@@ -451,7 +433,7 @@ class ModelSUPERTREX:
             ax[k].spines['bottom'].set_visible(False)
             ax[k].get_xaxis().set_ticks([])
 
-        plt.savefig(s.results_path + 'Overall.' + exp['plot_format'])
+        plt.savefig(s.results_path + 'Overall.' + exp['plot_format'], rasterized=(exp['plot_format']=='pdf'))
 
         if exp['display_plot'] == 'Yes':
             fig.canvas.manager.window.showMaximized()
@@ -544,7 +526,7 @@ class ModelSUPERTREX:
         ax.get_xaxis().set_ticks([])
         ax.get_yaxis().set_ticks([])
 
-        plt.savefig(s.results_path + 'TimeSeries.' + exp['plot_format'])
+        plt.savefig(s.results_path + 'TimeSeries.' + exp['plot_format'])#, rasterized=(exp['plot_format']=='pdf'))
 
 
         fig, ax = plt.subplots(1)
@@ -561,7 +543,7 @@ class ModelSUPERTREX:
         ax.spines['bottom'].set_visible(False)
         ax.get_xaxis().set_ticks([])
 
-        plt.savefig(s.results_path + 'W_norm.' + exp['plot_format'])
+        plt.savefig(s.results_path + 'W_norm.' + exp['plot_format'])#, rasterized=(exp['plot_format']=='pdf'))
 
 
         fig, ax = plt.subplots(1)
@@ -580,7 +562,7 @@ class ModelSUPERTREX:
         ax.spines['bottom'].set_visible(False)
         ax.get_xaxis().set_ticks([])
 
-        plt.savefig(s.results_path + 'MSE.' + exp['plot_format'])
+        plt.savefig(s.results_path + 'MSE.' + exp['plot_format'])#, rasterized=(exp['plot_format']=='pdf'))
 
 
         fig, ax = plt.subplots(1)
@@ -598,7 +580,7 @@ class ModelSUPERTREX:
         ax.get_xaxis().set_ticks([])
         ax.get_yaxis().set_ticks([])
 
-        plt.savefig(s.results_path + 'CoordinateX.' + exp['plot_format'])
+        plt.savefig(s.results_path + 'CoordinateX.' + exp['plot_format'])#, rasterized=(exp['plot_format']=='pdf'))
 
 
         fig, ax = plt.subplots(1)
@@ -616,7 +598,8 @@ class ModelSUPERTREX:
         ax.get_xaxis().set_ticks([])
         ax.get_yaxis().set_ticks([])
 
-        plt.savefig(s.results_path + 'CoordinateY.' + exp['plot_format'])
+        plt.savefig(s.results_path + 'CoordinateY.' + exp['plot_format'])#, rasterized=(exp['plot_format']=='pdf'))
+
         if task.type == 3:
             fig, ax = plt.subplots(1)
 
@@ -632,7 +615,8 @@ class ModelSUPERTREX:
             ax.spines['bottom'].set_visible(False)
             ax.get_xaxis().set_ticks([])
 
-            plt.savefig(s.results_path + 'Cost.' + exp['plot_format'])
+            plt.savefig(s.results_path + 'Cost.' + exp['plot_format'])#, rasterized=(exp['plot_format']=='pdf'))
+
         if s.task_type != 1 and s.n_out <= 4:
             for i in range(s.n_out):
                 fig, ax = plt.subplots(1)
@@ -649,7 +633,8 @@ class ModelSUPERTREX:
                 ax.get_xaxis().set_ticks([])
                 ax.get_yaxis().set_ticks([])
 
-                plt.savefig(s.results_path + 'Theta' + str(i) + '.' + exp['plot_format'])
+                plt.savefig(s.results_path + 'Theta' + str(i) + '.' + exp['plot_format'])#, rasterized=(exp['plot_format']=='pdf'))
+
 
         print('Done.')
         # ------------------------------------------------------------------- #
